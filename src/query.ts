@@ -70,6 +70,23 @@ export async function getToday(c: Ctx) {
     resp: (daily?.resp_rate != null && (daily?.resp_conf ?? 0) >= 0.5)
       ? { value: Math.round(daily.resp_rate * 10) / 10, confidence: daily.resp_conf }
       : null,
+    // Nocturnal HRV (RMSSD, ms) from beat-to-beat RR — the real one, measured.
+    hrv: (daily?.hrv_rmssd != null && (daily?.hrv_conf ?? 0) > 0)
+      ? {
+          rmssd: Math.round(daily.hrv_rmssd * 10) / 10,
+          confidence: daily.hrv_conf,
+          tier: 'HIGH',
+          label: 'Nocturnal HRV (RMSSD)',
+        }
+      : null,
+    // Skin temp + blood-oxygen as RELATIVE indices (raw ADC − personal baseline);
+    // the band never sends a finished °C / %, so we only show the deviation.
+    skin_temp: daily?.skin_temp_idx != null
+      ? { value: daily.skin_temp_idx, unit: 'Δ', tier: 'RELATIVE', label: 'Skin temp vs baseline' }
+      : null,
+    spo2: daily?.spo2_idx != null
+      ? { value: daily.spo2_idx, unit: 'Δ', tier: 'RELATIVE', label: 'Blood-oxygen vs baseline' }
+      : null,
     daily: daily ? {
       strain: metric(daily.strain, 'score', 'Strain', df, 'strain'),
       resting_hr: metric(daily.resting_hr, 'bpm', 'Resting HR', df, 'resting_hr'),
@@ -84,7 +101,9 @@ export async function getToday(c: Ctx) {
       readiness: metric(daily.readiness, 'score', 'Readiness (est.) — not HRV-based', df, 'readiness'),
       calories: metric(daily.calories, 'kcal', 'Active calories (est.)', df, 'calories'),
       steps: metric(daily.steps, 'steps', 'Steps (est.)', df, 'steps'),
-      wear_min: metric(daily.wear_min, 'min', 'Worn', df, 'wear'),
+      // Wear is a direct count of worn minutes — full confidence when present
+      // (otherwise the UI hides any metric with null/0 confidence).
+      wear_min: { ...metric(daily.wear_min, 'min', 'Worn', df, 'wear'), confidence: daily.wear_min != null ? 1 : 0, tier: 'AUTH' },
       hr_zones: daily.hr_zones ? JSON.parse(daily.hr_zones) : null,
       acwr: metric(daily.acwr, 'ratio', `Load`, df, 'load'),
       fitness_trend: metric(daily.fitness_trend, '', 'Fitness trend', df, 'fitness'),

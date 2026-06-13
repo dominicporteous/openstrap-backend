@@ -12,6 +12,7 @@ import { getDayStrain, getDaySleep, getDayTimeline, getDayStress } from './dayde
 import { getRecords } from './records'
 import { getNotifications, markNotificationsRead } from './notifications'
 import { runRespRate } from './resp'
+import { runBiometrics } from './biometrics'
 import { seedInit, seedMinutes, seedAnalytics } from './seed'
 
 type Bindings = {
@@ -243,6 +244,15 @@ app.post('/admin/run-resp', async (c) => {
   return c.json({ ok: true, ...res })
 })
 
+// HRV (RMSSD) + relative skin-temp / SpO₂ from the V24 RR/ADC bytes, re-decoded
+// from R2. Heavy (R2 reads) → admin / cron only. Writes daily.hrv_rmssd etc.
+app.post('/admin/run-biometrics', async (c) => {
+  const body = await c.req.json<{ user_id: string; days?: number }>().catch(() => ({} as any))
+  if (!body.user_id) return c.json({ error: 'user_id required' }, 400)
+  const res = await runBiometrics(c.env, body.user_id, body.days ?? 3)
+  return c.json({ ok: true, ...res })
+})
+
 // Phased to stay under the free-plan per-request subrequest cap. The shell
 // orchestrates: init → minutes (chunked) → analytics. `now` is pinned across
 // phases so day indices line up. Each phase is idempotent.
@@ -339,6 +349,14 @@ export default {
           ).bind(since).all<{ user_id: string }>()
           for (const u of users ?? []) await runRespRate(env, u.user_id, 2)
         } catch (e) { console.error('resp cron failed', e) }
+        // HRV + relative skin-temp/SpO₂ from the V24 RR/ADC bytes (R2 re-decode).
+        try {
+          const since = new Date(Date.now() - 3 * DAY * 1000).toISOString().slice(0, 10)
+          const { results: users } = await env.DB.prepare(
+            'SELECT DISTINCT user_id FROM daily WHERE date >= ?',
+          ).bind(since).all<{ user_id: string }>()
+          for (const u of users ?? []) await runBiometrics(env, u.user_id, 3)
+        } catch (e) { console.error('biometrics cron failed', e) }
         const cutoff = Math.floor(Date.now() / 1000) - 90 * DAY
         await env.DB.prepare('DELETE FROM minute WHERE ts_min < ?').bind(cutoff).run()
       })())

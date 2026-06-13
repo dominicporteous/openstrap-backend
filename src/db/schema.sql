@@ -79,6 +79,8 @@ CREATE TABLE IF NOT EXISTS daily(
   stress TEXT,                         -- arousal monitor summary (JSON)
   nocturnal TEXT,                      -- nocturnal-heart summary (JSON)
   resp_rate REAL, resp_conf REAL,      -- nightly respiratory rate (PPG; GATED)
+  hrv_rmssd REAL, hrv_conf REAL,       -- nocturnal HRV (RMSSD, ms) from beat-to-beat RR
+  skin_temp_idx REAL, spo2_idx REAL,   -- RELATIVE: raw ADC night value − personal baseline
   confidence REAL, flags TEXT, updated_at INTEGER,
   PRIMARY KEY(user_id, date)
 );
@@ -105,6 +107,7 @@ CREATE TABLE IF NOT EXISTS baselines(
   resting_hr REAL, max_hr REAL, sleep_need_min REAL,
   skin_temp REAL, chronic_strain REAL,
   sleeping_hr REAL, resp_rate REAL,    -- nocturnal-HR + respiratory baselines
+  hrv_rmssd REAL, skin_temp_raw REAL, spo2_raw REAL,  -- HRV + raw temp/red-ADC baselines
   updated_at INTEGER
 );
 
