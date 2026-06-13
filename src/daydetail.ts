@@ -245,3 +245,61 @@ export async function getDayTimeline(c: Ctx) {
     },
   })
 }
+
+// ── /day/heart ─────────────────────────────────────────────────────────────
+// Everything heart/autonomic for a day: 24h HR timeline, resting HR, HRV (RMSSD/
+// SDNN/LF-HF), recovery, HR-zone minutes, nocturnal-HR dynamics, stress + illness.
+// Recovery/stress/illness/HRV are read from the daily row (computed in biometrics).
+export async function getDayHeart(c: Ctx) {
+  const date = (c.req.query('date') || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: 'date=YYYY-MM-DD required' }, 400)
+  const start = dayStartOf(date)
+  const mins = await loadMinutes(c, start, start + DAY)
+  const userId = c.get('userId')
+  const d = await c.env.DB.prepare(
+    'SELECT resting_hr, recovery, hrv_rmssd, hrv_sdnn, hrv_lfhf, hrv_conf, hr_zones, nocturnal, stress, illness, drivers FROM daily WHERE user_id = ? AND date = ?',
+  ).bind(userId, date).first<any>()
+  const base = await c.env.DB.prepare('SELECT resting_hr, hrv_rmssd FROM baselines WHERE user_id = ?')
+    .bind(userId).first<any>()
+  const parse = (s: string | null) => { try { return s ? JSON.parse(s) : null } catch { return null } }
+  const worn = mins.filter((m) => m.wrist_on && (m.hr_avg ?? 0) > 0)
+  const hrs = worn.map((m) => m.hr_avg as number)
+  return c.json({
+    date,
+    hr: downsample(mins.map((m) => ({ t: m.ts_min, v: m.hr_avg ?? 0 })), 240),
+    avg_hr: hrs.length ? Math.round(hrs.reduce((a, b) => a + b, 0) / hrs.length) : null,
+    max_hr: hrs.length ? Math.round(Math.max(...hrs)) : null,
+    resting_hr: d?.resting_hr ?? null,
+    resting_hr_baseline: base?.resting_hr ?? null,
+    recovery: d?.recovery ?? null,
+    hrv: d?.hrv_rmssd != null
+      ? { rmssd: d.hrv_rmssd, sdnn: d.hrv_sdnn, lf_hf: d.hrv_lfhf, confidence: d.hrv_conf, baseline: base?.hrv_rmssd ?? null }
+      : null,
+    zones: d?.hr_zones ? parse(d.hr_zones) : null,
+    nocturnal: parse(d?.nocturnal ?? null),
+    stress: parse(d?.stress ?? null),
+    illness: parse(d?.illness ?? null),
+    drivers: parse(d?.drivers ?? null),
+  })
+}
+
+// ── /day/lungs ─────────────────────────────────────────────────────────────
+// Respiratory rate (RSA from RR, gated on confidence) + relative SpO₂. Honest:
+// resp is null on nights without enough clean RR; SpO₂ is a baseline deviation,
+// never an absolute %.
+export async function getDayLungs(c: Ctx) {
+  const date = (c.req.query('date') || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: 'date=YYYY-MM-DD required' }, 400)
+  const userId = c.get('userId')
+  const d = await c.env.DB.prepare(
+    'SELECT resp_rate, resp_conf, spo2_idx, drivers FROM daily WHERE user_id = ? AND date = ?',
+  ).bind(userId, date).first<any>()
+  const parse = (s: string | null) => { try { return s ? JSON.parse(s) : null } catch { return null } }
+  const respShown = d?.resp_rate != null && (d?.resp_conf ?? 0) >= 0.3
+  return c.json({
+    date,
+    resp_rate: respShown ? { value: d.resp_rate, confidence: d.resp_conf, unit: 'brpm', tier: 'ESTIMATE', label: 'Respiratory rate (RSA)' } : null,
+    spo2: d?.spo2_idx != null ? { value: d.spo2_idx, unit: 'Δ', tier: 'RELATIVE', label: 'Blood-oxygen vs baseline' } : null,
+    drivers: parse(d?.drivers ?? null),
+  })
+}

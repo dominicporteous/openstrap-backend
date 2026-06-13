@@ -254,15 +254,19 @@ export async function processUser(
       s.hrr60 != null && (best == null || s.hrr60 > best) ? s.hrr60 : best, null)
     hrrSeries.push(dayHrr)
 
+    // Only clear AUTO-detected sessions — manually-started / live workouts are
+    // user-owned and must survive a re-derive.
     statements.push(
-      db.prepare('DELETE FROM sessions WHERE user_id = ? AND start_ts >= ? AND start_ts < ?')
+      db.prepare("DELETE FROM sessions WHERE user_id = ? AND start_ts >= ? AND start_ts < ? AND (source IS NULL OR source = 'auto')")
         .bind(userId, dayStart, dayStart + DAY),
     )
     for (const s of sessions) {
       const sid = `${userId}:${s.start_ts}`
       statements.push(db.prepare(
-        'INSERT INTO sessions (user_id, id, start_ts, end_ts, type, avg_hr, max_hr, strain, calories, hrr60, zones, confidence) ' +
-        'VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+        'INSERT INTO sessions (user_id, id, start_ts, end_ts, type, avg_hr, max_hr, strain, calories, hrr60, zones, confidence, status, source) ' +
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'done','auto') ON CONFLICT(user_id, id) DO UPDATE SET " +
+        'end_ts=excluded.end_ts, type=excluded.type, avg_hr=excluded.avg_hr, max_hr=excluded.max_hr, ' +
+        'strain=excluded.strain, calories=excluded.calories, hrr60=excluded.hrr60, zones=excluded.zones, confidence=excluded.confidence',
       ).bind(userId, sid, s.start_ts, s.end_ts, s.type, Math.round(s.avg_hr), Math.round(s.max_hr),
         s.strain, s.kcal, s.hrr60 == null ? null : Math.round(s.hrr60), JSON.stringify(s.zones), s.confidence))
     }

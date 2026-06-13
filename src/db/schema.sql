@@ -103,9 +103,13 @@ CREATE TABLE IF NOT EXISTS sessions(
   start_ts INTEGER, end_ts INTEGER, type TEXT,
   avg_hr INTEGER, max_hr INTEGER, strain REAL, calories REAL, hrr60 INTEGER, zones TEXT,
   confidence REAL,
+  status TEXT,   -- 'live' | 'done'
+  source TEXT,   -- 'manual' (user started) | 'auto' (detected)
+  title TEXT,    -- optional user label
   PRIMARY KEY(user_id, id)
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, start_ts);
+CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(user_id, status);
 
 CREATE TABLE IF NOT EXISTS baselines(
   user_id TEXT PRIMARY KEY,

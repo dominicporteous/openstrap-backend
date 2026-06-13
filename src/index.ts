@@ -8,8 +8,9 @@ import { handleQueueBatch, type AnalyticsMessage } from './queue'
 import { getToday, getSleep, getStrain, getSessions, getTrends, getChart } from './query'
 import { getHistory } from './history'
 import { postJournal, getJournal, getJournalInsights } from './journal'
-import { getDayStrain, getDaySleep, getDayTimeline, getDayStress } from './daydetail'
+import { getDayStrain, getDaySleep, getDayTimeline, getDayStress, getDayHeart, getDayLungs } from './daydetail'
 import { getTrend } from './trend'
+import { workoutStart, workoutEnd, listWorkouts, getWorkout } from './workouts'
 import { getRecords } from './records'
 import { getNotifications, markNotificationsRead } from './notifications'
 import { runRespRate } from './resp'
@@ -70,6 +71,8 @@ app.use('/journal', requireJwt)
 app.use('/journal/*', requireJwt)
 app.use('/day/*', requireJwt)
 app.use('/trend/*', requireJwt)
+app.use('/workout/*', requireJwt)
+app.use('/workouts', requireJwt)
 app.use('/records', requireJwt)
 app.use('/notifications', requireJwt)
 app.use('/notifications/*', requireJwt)
@@ -221,7 +224,13 @@ app.get('/day/strain', getDayStrain)
 app.get('/day/sleep', getDaySleep)
 app.get('/day/timeline', getDayTimeline)
 app.get('/day/stress', getDayStress)
+app.get('/day/heart', getDayHeart)
+app.get('/day/lungs', getDayLungs)
 app.get('/trend/:metric', getTrend)
+app.post('/workout/start', workoutStart)
+app.post('/workout/end', workoutEnd)
+app.get('/workouts', listWorkouts)
+app.get('/workout/:id', getWorkout)
 app.get('/records', getRecords)
 app.get('/notifications', getNotifications)
 app.post('/notifications/read', markNotificationsRead)
