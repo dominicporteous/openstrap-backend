@@ -108,6 +108,11 @@ export async function getToday(c: Ctx) {
       },
       // Recovery is HRV-based (Plews lnRMSSD z) — replaces the old heuristic readiness.
       recovery: metric(daily.recovery, 'score', 'Recovery (HRV)', df, 'recovery'),
+      // Composite Readiness (HRV ∩ sleep ∩ dip ∩ arousal) — the Today/widget headline.
+      readiness: { value: daily.readiness ?? null, unit: 'score', confidence: daily.readiness != null ? 0.7 : 0, tier: 'ESTIMATE', label: 'Readiness', inputs_used: ['recovery', 'sleep'] },
+      vo2max: { value: daily.vo2max ?? null, unit: 'ml/kg/min', confidence: daily.vo2max != null ? 0.5 : 0, tier: 'ESTIMATE', label: 'VO₂max' },
+      fitness: { value: daily.fitness ?? null, unit: '', confidence: daily.fitness != null ? 0.6 : 0, tier: 'ESTIMATE', label: 'Fitness' },
+      form: { value: daily.form ?? null, unit: '', confidence: daily.form != null ? 0.6 : 0, tier: 'ESTIMATE', label: 'Form' },
       calories: metric(daily.calories, 'kcal', 'Active calories (est.)', df, 'calories'),
       steps: metric(daily.steps, 'steps', 'Steps (est.)', df, 'steps'),
       // Wear is a direct count of worn minutes — full confidence when present

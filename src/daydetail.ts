@@ -80,7 +80,7 @@ export async function getDayStrain(c: Ctx) {
 
   // Training-load + day totals from the derived `daily` row (acwr/fitness/cals/steps + drivers).
   const dr = await c.env.DB.prepare(
-    'SELECT acwr, fitness_trend, calories, steps, drivers FROM daily WHERE user_id = ? AND date = ?',
+    'SELECT acwr, fitness_trend, calories, steps, drivers, vo2max, fitness, fatigue, form, monotony FROM daily WHERE user_id = ? AND date = ?',
   ).bind(c.get('userId'), date).first<any>()
   const acwr = dr?.acwr ?? null
   const band = acwr == null ? null
@@ -97,6 +97,11 @@ export async function getDayStrain(c: Ctx) {
     // Training load (ACWR band) + fitness trend + day energy/steps.
     load: acwr == null ? null : { acwr: Math.round(acwr * 100) / 100, band },
     fitness_trend: dr?.fitness_trend ?? null,
+    // Banister fitness/fatigue/form + VO₂max + Foster monotony (the Body fitness model).
+    vo2max: dr?.vo2max ?? null,
+    fitness_model: (dr?.fitness != null || dr?.fatigue != null || dr?.form != null)
+      ? { fitness: dr?.fitness ?? null, fatigue: dr?.fatigue ?? null, form: dr?.form ?? null } : null,
+    monotony: dr?.monotony ?? null,
     calories: dr?.calories ?? null,
     steps: dr?.steps ?? null,
     drivers: dr?.drivers ? safe(dr.drivers) : null,
@@ -334,7 +339,7 @@ export async function getDayHeart(c: Ctx) {
   const mins = await loadMinutes(c, start, start + DAY)
   const userId = c.get('userId')
   const d = await c.env.DB.prepare(
-    'SELECT resting_hr, recovery, hrv_rmssd, hrv_sdnn, hrv_lfhf, hrv_conf, hr_zones, nocturnal, stress, illness, drivers, resp_rate, resp_conf, spo2_idx FROM daily WHERE user_id = ? AND date = ?',
+    'SELECT resting_hr, recovery, readiness, hrv_rmssd, hrv_sdnn, hrv_lfhf, hrv_conf, hrv_cv, irregular, hr_zones, nocturnal, stress, illness, drivers, resp_rate, resp_conf, spo2_idx FROM daily WHERE user_id = ? AND date = ?',
   ).bind(userId, date).first<any>()
   const base = await c.env.DB.prepare('SELECT resting_hr, hrv_rmssd FROM baselines WHERE user_id = ?')
     .bind(userId).first<any>()
@@ -349,13 +354,15 @@ export async function getDayHeart(c: Ctx) {
     resting_hr: d?.resting_hr ?? null,
     resting_hr_baseline: base?.resting_hr ?? null,
     recovery: d?.recovery ?? null,
+    readiness: d?.readiness ?? null,
     hrv: d?.hrv_rmssd != null
-      ? { rmssd: d.hrv_rmssd, sdnn: d.hrv_sdnn, lf_hf: d.hrv_lfhf, confidence: d.hrv_conf, baseline: base?.hrv_rmssd ?? null }
+      ? { rmssd: d.hrv_rmssd, sdnn: d.hrv_sdnn, lf_hf: d.hrv_lfhf, cv: d.hrv_cv ?? null, confidence: d.hrv_conf, baseline: base?.hrv_rmssd ?? null }
       : null,
     zones: d?.hr_zones ? parse(d.hr_zones) : null,
     nocturnal: parse(d?.nocturnal ?? null),
     stress: parse(d?.stress ?? null),
     illness: parse(d?.illness ?? null),
+    irregular: parse(d?.irregular ?? null),
     // Respiratory rate (RSA, gated) + relative SpO₂ now live under Heart.
     resp: (d?.resp_rate != null && (d?.resp_conf ?? 0) >= 0.3)
       ? { value: d.resp_rate, confidence: d.resp_conf } : null,
