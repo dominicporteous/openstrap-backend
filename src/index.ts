@@ -16,6 +16,7 @@ import { getNotifications, markNotificationsRead } from './notifications'
 import { runRespRate } from './resp'
 import { runBiometrics } from './biometrics'
 import { runStepsImu } from './steps_imu'
+import { getAppStatus, adminGetConfig, adminSetConfig } from './appconfig'
 import { seedInit, seedMinutes, seedAnalytics } from './seed'
 
 type Bindings = {
@@ -80,6 +81,10 @@ app.use('/notifications/*', requireJwt)
 app.use('/admin/*', requireAdmin)
 
 app.get('/', (c) => c.json({ ok: true, service: 'openstrap-backend', ts: Math.floor(Date.now() / 1000) }))
+
+// Public app status (OTA update pointer + admin alert banner). No JWT: the update
+// prompt and a "service down" notice must reach clients even with an expired session.
+app.get('/app/status', getAppStatus)
 
 // ========================= AUTH =========================
 
@@ -239,6 +244,10 @@ app.get('/notifications', getNotifications)
 app.post('/notifications/read', markNotificationsRead)
 
 // ========================= ADMIN =========================
+
+// App config — OTA update pointer + home-screen alert banner (see appconfig.ts).
+app.get('/admin/config', adminGetConfig)
+app.post('/admin/config', adminSetConfig)
 
 app.post('/admin/run-analytics', async (c) => {
   const body = await c.req.json<{ user_id?: string; days?: number; bio?: boolean }>().catch(() => ({} as any))
