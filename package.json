@@ -8,8 +8,8 @@
   },
   "dependencies": {
     "hono": "^4.0.0",
-    "openstrap-analytics": "file:../openstrap-analytics",
-    "openstrap-protocol": "file:../openstrap-protocol"
+    "openstrap-analytics": "git+https://github.com/OpenStrap/analytics.git",
+    "openstrap-protocol": "git+https://github.com/OpenStrap/protocol.git"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240000.0",
