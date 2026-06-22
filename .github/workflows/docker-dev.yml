@@ -10,6 +10,9 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  # GitHub Actions runners are migrating away from Node 20;
+  # these action versions still need it temporarily
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
 
 jobs:
   build:
@@ -26,10 +29,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.repository_owner }}
-          # Create a GitHub Personal Access Token (classic) with `write:packages` scope
-          # and add it as a repository secret named GHCR_PAT
-          password: ${{ secrets.GHCR_PAT }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
@@ -42,10 +43,17 @@ jobs:
             type=sha,prefix=,format=short
             type=raw,value=dev,enable={{is_default_branch}}
 
+      - name: Lowercase image name (ghcr requires lowercase)
+        id: lower
+        run: |
+          echo "image_name_lower=${IMAGE_NAME,,}" >> $GITHUB_OUTPUT
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ env.REGISTRY }}/${{ steps.lower.outputs.image_name_lower }}:${{ github.ref_name == 'main' && 'dev' || github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
