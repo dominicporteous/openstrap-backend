@@ -137,15 +137,16 @@ export async function ingestEvents(c: Context<{ Bindings: IngestEnv; Variables: 
   const { device_id, events } = await c.req.json<{ device_id: string; events: string[] }>()
   if (!device_id || !Array.isArray(events)) return c.json({ error: 'Invalid payload' }, 400)
 
+  const now = Math.floor(Date.now() / 1000)
   const stmt = c.env.DB.prepare(
-    'INSERT OR IGNORE INTO events (user_id, device_id, hex, event_id, ts) VALUES (?,?,?,?,?)')
+    'INSERT OR IGNORE INTO events (user_id, device_id, hex, event_id, ts, ingested_at) VALUES (?,?,?,?,?,?)')
   const batch = []
   for (const hex of events) {
     try {
       const b = hexToBytes(hex)
       if (b.length < 8) continue
       const view = new DataView(b.buffer, b.byteOffset, b.byteLength)
-      batch.push(stmt.bind(userId, device_id, hex, view.getUint16(2, true), view.getUint32(4, true)))
+      batch.push(stmt.bind(userId, device_id, hex, view.getUint16(2, true), view.getUint32(4, true), now))
     } catch { /* skip malformed */ }
   }
   if (batch.length > 0) await c.env.DB.batch(batch)

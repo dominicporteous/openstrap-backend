@@ -150,6 +150,17 @@ export async function getMetrics(c: any) {
     if (lastEvent && lastEvent.max_ts) {
       output += `openstrap_last_event_ts{${labels}} ${lastEvent.max_ts}\n`;
     }
+
+    const events30s = (await db
+      .prepare(
+        "SELECT COUNT(*) as count FROM events WHERE user_id = ? AND ingested_at > ?",
+      )
+      .bind(user.id, now - 30)
+      .first()) as any;
+
+    if (events30s) {
+      output += `openstrap_events_ingested_30s{${labels}} ${events30s.count}\n`;
+    }
   }
 
   return c.text(output, 200, { "Content-Type": "text/plain; version=0.0.4" });

@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS events(
   hex TEXT NOT NULL,
   event_id INTEGER,
   ts INTEGER,
+  ingested_at INTEGER,
   PRIMARY KEY(user_id, device_id, hex)
 );
 CREATE INDEX IF NOT EXISTS idx_events_user_ts ON events(user_id, ts);
