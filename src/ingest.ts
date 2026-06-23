@@ -31,17 +31,33 @@ interface IngestEnv {
 // times. A cheap dirty flag here + the cron as the single enqueue point makes it one
 // sweep per user per 30 min. Freshness is bounded by the sweep interval (fine — and
 // recovery still fires promptly on wake via the sleep-detection trigger).
-async function markUserDirty(env: IngestEnv, userId: string) {
+async function markUserDirty(
+  env: IngestEnv,
+  userId: string,
+  diag?: { battery?: number; charging?: boolean },
+) {
   // Cost: `dirty` stays 1 from the first ingest until the wake-close clears it, so an
   // unconditional upsert bills a D1 ROW WRITE on every batch (~1,440/user/day) to set a
   // flag that's already 1. The conditional DO UPDATE writes a row ONLY on the real 0→1
   // transition (first ingest of a new cycle / after a close) — steady-state batches hit
   // the WHERE=false path and write 0 rows (just a cheap PK read). ~1 dirty-write per
   // wake-cycle instead of per-POST, cutting ingest D1 writes ~1/3. Same observable state.
-  await env.DB.prepare(
-    'INSERT INTO analytics_cursor (user_id, last_min_ts, dirty) VALUES (?,0,1) ' +
-    'ON CONFLICT(user_id) DO UPDATE SET dirty = 1 WHERE analytics_cursor.dirty = 0',
-  ).bind(userId).run()
+  const hasDiag = diag && (diag.battery !== undefined || diag.charging !== undefined)
+  if (hasDiag) {
+    await env.DB.prepare(
+      'INSERT INTO analytics_cursor (user_id, last_min_ts, dirty, battery_pct, is_charging) VALUES (?,0,1,?,?) ' +
+        'ON CONFLICT(user_id) DO UPDATE SET dirty = 1, battery_pct = COALESCE(excluded.battery_pct, analytics_cursor.battery_pct), is_charging = COALESCE(excluded.is_charging, analytics_cursor.is_charging)',
+    )
+      .bind(userId, diag.battery ?? null, diag.charging !== undefined ? (diag.charging ? 1 : 0) : null)
+      .run()
+  } else {
+    await env.DB.prepare(
+      'INSERT INTO analytics_cursor (user_id, last_min_ts, dirty) VALUES (?,0,1) ' +
+        'ON CONFLICT(user_id) DO UPDATE SET dirty = 1 WHERE analytics_cursor.dirty = 0',
+    )
+      .bind(userId)
+      .run()
+  }
 }
 
 // POST /ingest/batch (JWT) { device_id, records: [hex,…] }
@@ -84,8 +100,24 @@ export async function ingestBatch(c: Context<{ Bindings: IngestEnv; Variables: {
   //    flow through here only if the caller mixes them; the dedicated
   //    /ingest/events route handles event-only payloads. Here we skip.
 
-  // 6. Enqueue analytics (or mark dirty). Never run inline.
-  if (minutesWritten > 0) await markUserDirty(c.env, userId)
+  // 6. Enqueue analytics (or mark dirty). Also capture device diagnostics.
+  let battery: number | undefined
+  let charging: boolean | undefined
+  for (const hex of records) {
+    try {
+      const b = hexToBytes(hex)
+      if (b[1] === 20 && b.length >= 4) {
+        // Battery status record (0x14 = 20)
+        battery = b[2]
+        charging = !!(b[3] & 0x01)
+      }
+    } catch {
+      /* skip */
+    }
+  }
+  if (minutesWritten > 0 || battery !== undefined || charging !== undefined) {
+    await markUserDirty(c.env, userId, { battery, charging })
+  }
 
   // 7. Respond. `received` = records accepted (a 2xx means we decoded + rolled them into
   //    the D1 minute store); `decoded` = records that yielded a surfaceable sample;

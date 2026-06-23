@@ -214,7 +214,9 @@ CREATE TABLE IF NOT EXISTS analytics_cursor(
   -- once per physiological day.
   sleep_phase TEXT,           -- 'awake' | 'asleep' | NULL
   phase_since INTEGER,        -- unix s of last transition
-  last_close_date TEXT        -- YYYY-MM-DD of last day-close
+  last_close_date TEXT,       -- YYYY-MM-DD of last day-close
+  battery_pct INTEGER,
+  is_charging INTEGER         -- 0/1
 );
 
 -- Per-user ingest rate-limit token bucket (RESILIENCE §7).
