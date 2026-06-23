@@ -25,6 +25,38 @@ interface IngestEnv {
   RATE_LIMITER?: RateLimiter
 }
 
+function decodeWhoopBattery(b: Uint8Array): { battery?: number; charging?: boolean } {
+  if (b.length < 4) return {}
+
+  // Case 1: Legacy Battery Status Record (0x14 = 20)
+  if (b[1] === 20 && b.length >= 4) {
+    return {
+      battery: b[2],
+      charging: !!(b[3] & 0x01),
+    }
+  }
+
+  // Case 2: Inner EVENT record (0x30)
+  if (b[0] === 0x30 && b.length >= 23 && b[2] === 0x03) {
+    const batteryRaw = b[13] | (b[14] << 8)
+    return {
+      battery: batteryRaw / 10,
+      charging: !!(b[22] & 0x01),
+    }
+  }
+
+  // Case 3: Full BLE frame (0xAA)
+  if (b[0] === 0xaa && b.length >= 27 && b[4] === 0x30 && b[6] === 0x03) {
+    const batteryRaw = b[17] | (b[18] << 8)
+    return {
+      battery: batteryRaw / 10,
+      charging: !!(b[26] & 0x01),
+    }
+  }
+
+  return {}
+}
+
 // Mark the user dirty so the NEXT 30-min cron sweep enqueues exactly ONE analytics
 // job for them (deduped). We deliberately do NOT enqueue per ingest batch: at scale
 // that storms the queue (~240 msgs/user/day) and re-derives the same day hundreds of
@@ -105,12 +137,9 @@ export async function ingestBatch(c: Context<{ Bindings: IngestEnv; Variables: {
   let charging: boolean | undefined
   for (const hex of records) {
     try {
-      const b = hexToBytes(hex)
-      if (b[1] === 20 && b.length >= 4) {
-        // Battery status record (0x14 = 20)
-        battery = b[2]
-        charging = !!(b[3] & 0x01)
-      }
+      const result = decodeWhoopBattery(hexToBytes(hex))
+      if (result.battery !== undefined) battery = result.battery
+      if (result.charging !== undefined) charging = result.charging
     } catch {
       /* skip */
     }
@@ -139,16 +168,43 @@ export async function ingestEvents(c: Context<{ Bindings: IngestEnv; Variables: 
 
   const now = Math.floor(Date.now() / 1000)
   const stmt = c.env.DB.prepare(
-    'INSERT OR IGNORE INTO events (user_id, device_id, hex, event_id, ts, ingested_at) VALUES (?,?,?,?,?,?)')
+    'INSERT OR IGNORE INTO events (user_id, device_id, hex, event_id, ts, ingested_at) VALUES (?,?,?,?,?,?)',
+  )
   const batch = []
+  let forceCharging: boolean | undefined
   for (const hex of events) {
     try {
       const b = hexToBytes(hex)
       if (b.length < 8) continue
       const view = new DataView(b.buffer, b.byteOffset, b.byteLength)
-      batch.push(stmt.bind(userId, device_id, hex, view.getUint16(2, true), view.getUint32(4, true), now))
-    } catch { /* skip malformed */ }
+      const event_id = view.getUint16(2, true)
+      const ts = view.getUint32(4, true)
+      batch.push(stmt.bind(userId, device_id, hex, event_id, ts, now))
+
+      // Update charging status from events
+      if (event_id === 7) forceCharging = true
+      else if (event_id === 8) forceCharging = false
+
+      // Support for BATTERY_LEVEL event (event_id 3)
+      if (event_id === 3) {
+        const result = decodeWhoopBattery(b)
+        if (result.charging !== undefined) forceCharging = result.charging
+        // If we have battery % from this event, we can update cursor too
+        if (result.battery !== undefined) {
+          await markUserDirty(c.env, userId, result)
+        }
+      }
+    } catch {
+      /* skip malformed */
+    }
   }
-  if (batch.length > 0) await c.env.DB.batch(batch)
+
+  if (batch.length > 0) {
+    await c.env.DB.batch(batch)
+    if (forceCharging !== undefined) {
+      await markUserDirty(c.env, userId, { charging: forceCharging })
+    }
+  }
+
   return c.json({ total: events.length, stored: batch.length })
 }
