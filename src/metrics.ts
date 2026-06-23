@@ -87,6 +87,24 @@ export async function getMetrics(c: any) {
     if (profile) {
       output += exportObjectMetrics("openstrap_user", profile, labels);
     }
+
+    // --- Healthspan Metrics ---
+    const latestHealthspan = (await db
+      .prepare(
+        "SELECT * FROM healthspan WHERE user_id = ? ORDER BY date DESC LIMIT 1",
+      )
+      .bind(user.id)
+      .first()) as any;
+
+    if (latestHealthspan) {
+      const dateLabel = `date="${latestHealthspan.date}"`;
+      const healthLabels = `${labels},${dateLabel}`;
+      output += exportObjectMetrics(
+        "openstrap_healthspan",
+        latestHealthspan,
+        healthLabels,
+      );
+    }
   }
 
   return c.text(output, 200, { "Content-Type": "text/plain; version=0.0.4" });

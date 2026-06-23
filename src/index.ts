@@ -18,6 +18,7 @@ import { workoutStart, workoutEnd, listWorkouts, getWorkout, deleteWorkout, auto
 import { getRecords } from './records'
 import { getNotifications, markNotificationsRead } from './notifications'
 import { getAppStatus, adminGetConfig, adminSetConfig } from './appconfig'
+import { getHealthspan, getHealthspanTrend, runHealthspanUpdate } from './healthspan'
 import { seedInit, seedMinutes, seedAnalytics } from './seed'
 import { getMetrics } from './metrics'
 
@@ -88,6 +89,8 @@ app.use('/trend/*', requireJwt)
 app.use('/workout/*', requireJwt)
 app.use('/workouts', requireJwt)
 app.use('/records', requireJwt)
+app.use('/healthspan', requireJwt)
+app.use('/healthspan/*', requireJwt)
 app.use('/notifications', requireJwt)
 app.use('/notifications/*', requireJwt)
 app.use('/admin/*', requireAdmin)
@@ -265,6 +268,8 @@ app.get('/workout/:id', getWorkout)
 app.post('/workout/:id/type', setWorkoutType)
 app.delete('/workout/:id', deleteWorkout)
 app.get('/records', getRecords)
+app.get('/healthspan', getHealthspan)
+app.get('/healthspan/trend', getHealthspanTrend)
 app.get('/notifications', getNotifications)
 app.post('/notifications/read', markNotificationsRead)
 
@@ -421,6 +426,8 @@ export default {
         // Seal days older than the hot window to gzipped R2 objects and drop them from
         // D1 (D1-hot / R2-sealed tiering — cuts D1 storage + per-row prune-deletes).
         try { await sealOldDays(env) } catch (e) { console.error('seal failed', e) }
+        // Daily Healthspan update.
+        try { await runHealthspanUpdate(env) } catch (e) { console.error('healthspan update failed', e) }
         // Backstop: clear any minute_day/events still unsealed past retention (e.g. no bucket).
         const nowS = Math.floor(Date.now() / 1000)
         await pruneMinuteDays(env, nowS, MINUTE_RETENTION_DAYS)
