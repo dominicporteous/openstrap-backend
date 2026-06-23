@@ -56,8 +56,8 @@ export async function runHealthspanUpdate(env: { DB: D1Database }) {
 
   // Get all users
   const { results: users } = await db
-    .prepare("SELECT id, age, created_at FROM users")
-    .all<{ id: string; age: number | null; created_at: number }>();
+    .prepare("SELECT id, age, sex, created_at FROM users")
+    .all<{ id: string; age: number | null; sex: string | null; created_at: number }>();
 
   for (const user of users) {
     try {
@@ -68,9 +68,29 @@ export async function runHealthspanUpdate(env: { DB: D1Database }) {
   }
 }
 
-async function updateHealthspanForUser(
+// ACSM VO2 Max Percentiles (Median values for each age group)
+const VO2_PERCENTILES: any = {
+  m: [
+    { age: 25, vo2: 44.5 },
+    { age: 35, vo2: 42.5 },
+    { age: 45, vo2: 41.0 },
+    { age: 55, vo2: 38.0 },
+    { age: 65, vo2: 34.5 },
+    { age: 75, vo2: 31.0 },
+  ],
+  f: [
+    { age: 25, vo2: 37.5 },
+    { age: 35, vo2: 35.5 },
+    { age: 45, vo2: 33.5 },
+    { age: 55, vo2: 30.5 },
+    { age: 65, vo2: 27.5 },
+    { age: 75, vo2: 24.5 },
+  ],
+};
+
+export async function updateHealthspanForUser(
   db: D1Database,
-  user: { id: string; age: number | null; created_at: number },
+  user: { id: string; age: number | null; sex: string | null; created_at: number },
   date: string,
   nowTs: number
 ) {
@@ -95,7 +115,6 @@ async function updateHealthspanForUser(
 
   const locked = recoveryCount < 5 ? 1 : 0;
   if (locked) {
-    // Optional: write a 'locked' record if not exists or update
     await db
       .prepare(
         "INSERT INTO healthspan (user_id, date, locked, updated_at) VALUES (?,?,?,?) " +
@@ -112,7 +131,7 @@ async function updateHealthspanForUser(
     .slice(0, 10);
   const dailyData = await db
     .prepare(
-      "SELECT date, strain, resting_hr, steps, vo2max, wear_min FROM daily WHERE user_id = ? AND date >= ? ORDER BY date DESC"
+      "SELECT date, strain, resting_hr, steps, vo2max, wear_min, hr_zones, nocturnal_dip_pct FROM daily WHERE user_id = ? AND date >= ? ORDER BY date DESC"
     )
     .bind(userId, sixMonthsAgo)
     .all<any>();
@@ -124,57 +143,81 @@ async function updateHealthspanForUser(
     .bind(userId, sixMonthsAgo)
     .all<any>();
 
-  // 3. Simple fitness Age Modeling (Simplified heuristics for demo)
-  // In a real scenario, this would use a complex regression model from openstrap-analytics
-  // Here we'll implement a reasonable proxy based on the brief.
-  
+  // 3. Multi-Pillar Scientific Weighted Model
   const avgRhr = average(dailyData.results.map((d: any) => d.resting_hr).filter(Boolean));
   const avgSteps = average(dailyData.results.map((d: any) => d.steps).filter(Boolean));
   const avgVo2 = average(dailyData.results.map((d: any) => d.vo2max).filter(Boolean));
+  const avgDip = average(dailyData.results.map((d: any) => d.nocturnal_dip_pct).filter(Boolean));
   const avgSleep = average(sleepData.results.map((s: any) => s.duration_min).filter(Boolean));
   const avgConsistency = average(sleepData.results.map((s: any) => s.regularity).filter(Boolean));
 
-  // Base fitness age starts at chronological age
-  let fitnessAge = age;
+  // Time in Zones 1-3 (Weekly avg)
+  const weeklyModerateActivity = dailyData.results
+    .slice(0, 7)
+    .reduce((sum: number, d: any) => {
+      try {
+        const zones = JSON.parse(d.hr_zones || "{}");
+        return sum + (zones.zone1_min || 0) + (zones.zone2_min || 0) + (zones.zone3_min || 0);
+      } catch { return sum; }
+    }, 0);
+
+  // Pillar 1: Aerobic Power (40% Weight) - VO2 Max Percentile Mapping
+  let aerobicAge = age;
+  if (avgVo2) {
+    const table = VO2_PERCENTILES[user.sex === 'f' ? 'f' : 'm'];
+    // Find where the user's VO2 sits in the chronological mapping
+    let bestFitIdx = 0;
+    while (bestFitIdx < table.length && avgVo2 < table[bestFitIdx].vo2) {
+      bestFitIdx++;
+    }
+    if (bestFitIdx === 0) {
+      aerobicAge = 20; // Exceptionally high VO2
+    } else if (bestFitIdx >= table.length) {
+      aerobicAge = 80; // Very low VO2
+    } else {
+      // Linear interpolation between brackets
+      const top = table[bestFitIdx - 1];
+      const bot = table[bestFitIdx];
+      const ratio = (avgVo2 - bot.vo2) / (top.vo2 - bot.vo2);
+      aerobicAge = bot.age - ratio * (bot.age - top.age);
+    }
+  }
+
+  // Pillar 2: Autonomic Health (20% Weight) - RHR and Dip
+  let autonomicAgeDelta = 0;
+  if (avgRhr) autonomicAgeDelta += (avgRhr - 55) / 5; // Reward < 55, penalty > 55
+  if (avgDip) autonomicAgeDelta += (0.15 - avgDip) * 20; // 15% dip is healthy benchmark
+
+  // Pillar 3: Metabolic & Activity (20% Weight)
+  let metabolicAgeDelta = 0;
+  if (avgSteps) {
+    // S-curve: Massive benefit up to 8k, diminishing after 12k
+    const stepDiff = Math.min(12000, avgSteps) - 8000;
+    metabolicAgeDelta -= (stepDiff / 4000) * 3;
+  }
+  if (weeklyModerateActivity > 150) {
+    metabolicAgeDelta -= 1; // 150 min Zone 1-3 weekly goal bonus
+  }
+
+  // Pillar 4: Circadian Health (20% Weight)
+  let circadianAgeDelta = 0;
+  if (avgConsistency) {
+    circadianAgeDelta += (80 - avgConsistency) / 10; // Benchmark consistency at 80
+  }
+  if (avgSleep < 420) circadianAgeDelta += 1; // Penalty for < 7h avg
+
+  // Final Weighted sum
+  const fitnessAge = (aerobicAge * 0.4) + ((age + autonomicAgeDelta) * 0.2) + ((age + metabolicAgeDelta) * 0.2) + ((age + circadianAgeDelta) * 0.2);
 
   const contributors: any = {
-    sleep: { score: avgSleep, impact: 0 },
-    strain: { score: avgSteps, impact: 0 },
-    fitness: { score: avgVo2, impact: 0 },
+    aerobic_power: { score: Math.round(avgVo2 || 0), age_impact: aerobicAge - age },
+    autonomic: { score: Math.round(avgRhr || 0), age_impact: autonomicAgeDelta },
+    metabolic: { score: Math.round(avgSteps || 0), age_impact: metabolicAgeDelta },
+    circadian: { score: Math.round(avgConsistency || 0), age_impact: circadianAgeDelta },
   };
 
-  // Adjustments (Heuristics)
-  // RHR: -1 year for every 5 bpm below 60
-  if (avgRhr) {
-    const rhrDiff = (60 - avgRhr) / 5;
-    fitnessAge -= rhrDiff;
-    contributors.fitness.impact += rhrDiff > 0 ? 1 : -1;
-  }
-
-  // VO2Max: -1 year for every 5 points above 40
-  if (avgVo2) {
-    const vo2Diff = (avgVo2 - 40) / 5;
-    fitnessAge -= vo2Diff;
-    contributors.fitness.impact += vo2Diff > 0 ? 1 : -1;
-  }
-
-  // Steps: -1 year for every 2000 steps above 8000
-  if (avgSteps) {
-    const stepDiff = (avgSteps - 8000) / 2000;
-    fitnessAge -= stepDiff;
-    contributors.strain.impact += stepDiff > 0 ? 1 : -1;
-  }
-
-  // Sleep: -1 year for every hour above 7 (capped at 9)
-  if (avgSleep) {
-    const sleepHourDiff = (avgSleep / 60 - 7);
-    const clampedSleepDiff = Math.max(-1, Math.min(2, sleepHourDiff));
-    fitnessAge -= clampedSleepDiff;
-    contributors.sleep.impact += clampedSleepDiff > 0 ? 1 : -1;
-  }
-
-  // 4. Pace of Aging (30-day Trend)
-  // Compare fitness age now vs 30 days ago
+  // 4. Pace of Aging (Short-term acceleration)
+  // Compare 30-day fitness age trend
   const thirtyDaysAgo = new Date(nowTs * 1000 - 30 * DAY * 1000)
     .toISOString()
     .slice(0, 10);
@@ -185,12 +228,11 @@ async function updateHealthspanForUser(
     .bind(userId, thirtyDaysAgo)
     .first<{ fitness_age: number | null }>();
 
-  let paceOfAging = 1.0; // Default: aging at the rate of time
+  let paceOfAging = 1.0; 
   if (prevHealth?.fitness_age) {
     const ageDiff = fitnessAge - prevHealth.fitness_age;
-    // If fitness age increased by 0.1 years over 30 days (0.08 years of time), pace is > 1
-    // Simplification:
-    paceOfAging = 1.0 + (ageDiff * 10); // Heuristic: 0.1 age increase in a month -> 2.0x pace
+    // Normalized to months: 0.1 year shift in 1 month is substantial
+    paceOfAging = 1.0 + (ageDiff * 12); 
   }
   
   paceOfAging = Math.max(-2.0, Math.min(4.0, paceOfAging)); // Clamp

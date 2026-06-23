@@ -10,9 +10,10 @@
 // A bare call with no phase runs init+analytics and is safe; the shell
 // orchestrates the minutes phases in chunks. Each phase is idempotent.
 
-import { processUser } from './analytics'
+import { processUser, loadBaseline } from './analytics'
 import { putDay } from './minute_store'
 import { uuid } from './auth'
+import { updateHealthspanForUser } from './healthspan'
 
 const DAY = 86400
 const MIN = 60
@@ -320,7 +321,7 @@ async function findOrCreateUser(db: D1Database, email: string, now: number): Pro
 // phase=init — create/clear user. Returns user_id.
 export async function seedInit(db: D1Database, email: string, now: number): Promise<{ user_id: string }> {
   const userId = await findOrCreateUser(db, email, now)
-  for (const t of ['minute', 'minute_day', 'daily', 'sleep', 'sessions', 'baselines', 'analytics_cursor']) {
+  for (const t of ['minute', 'minute_day', 'daily', 'sleep', 'sessions', 'baselines', 'healthspan', 'analytics_cursor']) {
     await db.prepare(`DELETE FROM ${t} WHERE user_id = ?`).bind(userId).run()
   }
   return { user_id: userId }
@@ -358,5 +359,25 @@ export async function seedAnalytics(
   db: D1Database, userId: string, days: number, now: number,
 ): Promise<{ daily: number; sleep: number; sessions: number }> {
   await processUser(db, userId, { historyDays: days, now })
-  return processUser(db, userId, { historyDays: days, now })
+
+  // Seed recovery data so Healthspan and Coach have inputs
+  const todayStart = Math.floor(now / DAY) * DAY
+  const firstDayStart = todayStart - (days - 1) * DAY
+  const r = rng(2000)
+  for (let d = 0; d < days; d++) {
+    const date = new Date((firstDayStart + d * DAY) * 1000).toISOString().slice(0, 10)
+    const recovery = 40 + Math.round(r() * 50) // 40..90
+    await db.prepare('UPDATE daily SET recovery = ? WHERE user_id = ? AND date = ?')
+      .bind(recovery, userId, date).run()
+  }
+
+  const result = await processUser(db, userId, { historyDays: days, now })
+
+  // Calculate Healthspan for the seeded history
+  const user = await db.prepare('SELECT id, age, sex, created_at FROM users WHERE id = ?')
+    .bind(userId).first<any>()
+  const todayStr = new Date(now * 1000).toISOString().slice(0, 10)
+  await updateHealthspanForUser(db, user, todayStr, now)
+
+  return result
 }
