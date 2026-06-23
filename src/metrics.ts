@@ -142,13 +142,20 @@ export async function getMetrics(c: any) {
       }
     }
 
-    const lastEvent = (await db
-      .prepare("SELECT MAX(ts) as max_ts FROM events WHERE user_id = ?")
+    const eventStats = (await db
+      .prepare(
+        "SELECT MAX(ts) as max_device_ts, MAX(ingested_at) as max_ingested_ts FROM events WHERE user_id = ?",
+      )
       .bind(user.id)
       .first()) as any;
 
-    if (lastEvent && lastEvent.max_ts) {
-      output += `openstrap_last_event_ts{${labels}} ${lastEvent.max_ts}\n`;
+    if (eventStats) {
+      if (eventStats.max_ingested_ts) {
+        output += `openstrap_last_event_ts{${labels}} ${eventStats.max_ingested_ts}\n`;
+      }
+      if (eventStats.max_device_ts) {
+        output += `openstrap_last_event_device_ts{${labels}} ${eventStats.max_device_ts}\n`;
+      }
     }
 
     const events30s = (await db
@@ -160,6 +167,17 @@ export async function getMetrics(c: any) {
 
     if (events30s) {
       output += `openstrap_events_ingested_30s{${labels}} ${events30s.count}\n`;
+    }
+
+    const events60s = (await db
+      .prepare(
+        "SELECT COUNT(*) as count FROM events WHERE user_id = ? AND ingested_at > ?",
+      )
+      .bind(user.id, now - 60)
+      .first()) as any;
+
+    if (events60s) {
+      output += `openstrap_events_ingested_60s{${labels}} ${events60s.count}\n`;
     }
   }
 
