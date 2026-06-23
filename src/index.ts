@@ -19,6 +19,7 @@ import { getRecords } from './records'
 import { getNotifications, markNotificationsRead } from './notifications'
 import { getAppStatus, adminGetConfig, adminSetConfig } from './appconfig'
 import { seedInit, seedMinutes, seedAnalytics } from './seed'
+import { getMetrics } from './metrics'
 
 type Bindings = {
   DB: D1Database
@@ -266,6 +267,10 @@ app.delete('/workout/:id', deleteWorkout)
 app.get('/records', getRecords)
 app.get('/notifications', getNotifications)
 app.post('/notifications/read', markNotificationsRead)
+
+// ========================= METRICS =========================
+
+app.get("/metrics", requireAdmin, getMetrics);
 
 // ========================= ADMIN =========================
 
