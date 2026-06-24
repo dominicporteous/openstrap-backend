@@ -179,6 +179,17 @@ export async function getMetrics(c: any) {
     if (events60s) {
       output += `openstrap_events_ingested_60s{${labels}} ${events60s.count}\n`;
     }
+
+    const events60m = (await db
+      .prepare(
+        "SELECT COUNT(*) as count FROM events WHERE user_id = ? AND ingested_at > ?",
+      )
+      .bind(user.id, now - 3600)
+      .first()) as any;
+
+    if (events60m) {
+      output += `openstrap_events_ingested_60m{${labels}} ${events60m.count}\n`;
+    }
   }
 
   return c.text(output, 200, { "Content-Type": "text/plain; version=0.0.4" });
